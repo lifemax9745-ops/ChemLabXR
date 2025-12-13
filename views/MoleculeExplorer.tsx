@@ -18,12 +18,14 @@ export const MoleculeExplorer: React.FC = () => {
   
   const { askAI } = useAI();
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopCamera();
     };
   }, []);
 
+  // Cleanup when toggling off AR
   useEffect(() => {
     if (!arMode) {
       stopCamera();
@@ -37,15 +39,16 @@ export const MoleculeExplorer: React.FC = () => {
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraStatus('error');
-      setErrorMessage("Camera API not supported in this browser. Ensure you are using HTTPS.");
+      setErrorMessage("Camera API not supported. Use HTTPS/Chrome/Safari.");
       return;
     }
 
     try {
+      // Try environment (rear) camera first
       const constraints = {
         audio: false,
         video: {
-          facingMode: 'environment'
+          facingMode: { ideal: 'environment' }
         }
       };
 
@@ -54,41 +57,29 @@ export const MoleculeExplorer: React.FC = () => {
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play()
-            .then(() => setCameraStatus('active'))
-            .catch(e => {
-              console.error("Video play failed", e);
-              setCameraStatus('error');
-              setErrorMessage("Failed to start video stream.");
-            });
-        };
+        // Explicitly play() is needed for some mobile browsers
+        await videoRef.current.play();
+        setCameraStatus('active');
       }
     } catch (err: any) {
-      console.error("Camera permission error", err);
-      // Fallback: try without specific constraints if environment failed
-      if (err.name === 'OverconstrainedError') {
-         try {
-            const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            streamRef.current = fallbackStream;
-            if (videoRef.current) {
-                videoRef.current.srcObject = fallbackStream;
-                videoRef.current.onloadedmetadata = () => {
-                    videoRef.current?.play()
-                    .then(() => setCameraStatus('active'))
-                    .catch(() => setCameraStatus('error'));
-                };
-            }
-            return;
-         } catch (e) {
-             // Fallback failed
-         }
+      console.error("Camera Init Error:", err);
+      
+      // Fallback: If environment camera fails, try any video source
+      try {
+          if (streamRef.current) stopCamera(); // Clear failed attempt
+          
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          streamRef.current = fallbackStream;
+          
+          if (videoRef.current) {
+              videoRef.current.srcObject = fallbackStream;
+              await videoRef.current.play();
+              setCameraStatus('active');
+          }
+      } catch (fallbackErr: any) {
+          setCameraStatus('error');
+          setErrorMessage("Permission denied or camera unavailable.");
       }
-
-      setCameraStatus('error');
-      setErrorMessage(err.name === 'NotAllowedError' 
-        ? "Camera permission denied. Please check site settings." 
-        : "Could not access camera: " + err.message);
     }
   };
 
@@ -98,6 +89,7 @@ export const MoleculeExplorer: React.FC = () => {
       streamRef.current = null;
     }
     if (videoRef.current) {
+      videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
   };
@@ -107,8 +99,7 @@ export const MoleculeExplorer: React.FC = () => {
       setArMode(false);
     } else {
       setArMode(true);
-      // Immediately try to start camera on toggle for better UX, 
-      // as this is a user-initiated event.
+      // Trigger camera start immediately on user interaction
       startCamera();
     }
   };
@@ -179,11 +170,11 @@ export const MoleculeExplorer: React.FC = () => {
            </button>
         </div>
 
-        {/* Video Background */}
+        {/* Video Background - Critical for AR */}
         <video 
           ref={videoRef} 
           autoPlay 
-          playsInline 
+          playsInline // Essential for iOS
           muted 
           className={`absolute inset-0 w-full h-full object-cover z-0 pointer-events-none transition-opacity duration-300 ${
             arMode && cameraStatus === 'active' ? 'opacity-100' : 'opacity-0'
@@ -231,6 +222,7 @@ export const MoleculeExplorer: React.FC = () => {
             camera={{ position: [0, 0, 5], fov: 50 }} 
             gl={{ alpha: true, antialias: true, preserveDrawingBuffer: true }}
             onCreated={({ gl, scene }) => {
+              // Ensure transparent background for AR overlay
               gl.setClearColor(0x000000, 0);
               scene.background = null;
             }}
